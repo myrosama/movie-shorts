@@ -34,6 +34,7 @@ from rich.table import Table
 from pipeline.movie_selector   import select_movie, get_movie_genre, mark_processed
 from pipeline.subtitle_fetcher import fetch_subtitles, parse_srt_to_text
 from pipeline.clip_scraper     import search_and_download_clips
+from pipeline.scene_analyzer   import get_tmdb_metadata
 from pipeline.script_generator import generate_all_scripts
 from pipeline.voice_synthesizer import synthesize_all_scripts
 from pipeline.video_assembler   import assemble_all_videos
@@ -134,14 +135,23 @@ def run_pipeline(
     else:
         console.print("[yellow]⚠️  No subtitles — using MovieClips only[/yellow]")
 
-    # ── Step 4: Generate AI scripts ───────────────────────────────────────────
-    console.print("\n[bold cyan]🤖 Step 4: Generating AI scripts...[/bold cyan]")
+    # ── Step 4: Fetch TMDB metadata (characters, plot) ────────────────────────
+    console.print("\n[bold cyan]🎥 Step 4: Fetching movie metadata...[/bold cyan]")
+    tmdb_meta = get_tmdb_metadata(title, tmdb_id or 0)
+    if tmdb_meta.get("overview"):
+        console.print(f"[dim]   Plot: {tmdb_meta['overview'][:100]}...[/dim]")
+    if tmdb_meta.get("cast"):
+        console.print(f"[dim]   Cast: {', '.join(c['name'] for c in tmdb_meta['cast'][:4])}[/dim]")
+
+    # ── Step 5: Generate AI scripts ───────────────────────────────────────────
+    console.print("\n[bold cyan]🤖 Step 5: Generating AI scripts...[/bold cyan]")
     scripts = generate_all_scripts(
         movie_title=title,
         subtitle_text=subtitle_text,
         overview=overview,
         clips=movieclips if movieclips else None,
         work_dir=work_dir,
+        tmdb_meta=tmdb_meta,
     )
 
     if not scripts:

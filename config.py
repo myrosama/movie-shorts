@@ -63,12 +63,12 @@ VIDEO_DURATIONS = {
 }
 
 # ─── Voice Settings ──────────────────────────────────────────────────────────
-# ElevenLabs voice IDs per genre
+# ElevenLabs voice IDs per genre (premade = free tier, professional = paid)
 ELEVENLABS_VOICES = {
-    "default":  "JxfH70f7jvYhi0DKD8Xs",   # Josh — energetic, punchy, great for recaps
-    "romance":  "EXAVITQu4vr4xnSDxMaL",   # Sarah — warm, mature
-    "horror":   "IKne3meq5aSn9XLyUdCD",   # Charlie — deep, intense
-    "comedy":   "FGY2WhTYpPnrIDTdsKH5",   # Laura — quirky, fun
+    "default":  "onwK4e9ZLuTAKqWW03F9",   # Daniel — Steady Broadcaster, deep & authoritative
+    "romance":  "nPczCjzI2devNBz1zQrb",   # Brian — Deep, Resonant, Comforting
+    "horror":   "SOYHLrjzK2X1ezoPC6cr",   # Harry — Fierce, intense
+    "comedy":   "cgSgspJ2msm6clMCkdW9",   # Jessica — Playful, bright
 }
 
 # ─── Music Settings ───────────────────────────────────────────────────────────
