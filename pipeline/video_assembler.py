@@ -121,9 +121,10 @@ def apply_copyright_rules(clip_path: str, output_path: str, clip_index: int) -> 
     return ffmpeg([
         "-i", clip_path,
         "-vf", vf,
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
+        "-c:v", "h264_nvenc",
+        "-preset", "p4",
+        "-rc", "vbr",
+        "-cq", "26",
         "-r", str(config.VIDEO_FPS),
         "-an",
         output_path,
@@ -289,7 +290,7 @@ def assemble_video(
     if not ffmpeg([
         "-f", "concat", "-safe", "0",
         "-i", concat_list,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        "-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "26",
         "-r", str(config.VIDEO_FPS),
         concat_raw,
     ], "Concatenating clips"):
@@ -328,9 +329,10 @@ def assemble_video(
         *audio_inputs,            # Narration (+ optional music)
         "-vf", vf_subtitle,       # Burn captions
         *audio_map,
-        "-c:v", "libx264",
-        "-preset", "slow",        # Better quality for final output
-        "-crf", "20",
+        "-c:v", "h264_nvenc",
+        "-preset", "p6",          # Better quality for final output
+        "-rc", "vbr",
+        "-cq", "22",
         "-c:a", "aac",
         "-b:a", "128k",
         "-r", str(config.VIDEO_FPS),

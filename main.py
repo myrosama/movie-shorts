@@ -122,12 +122,16 @@ def run_pipeline(
     else:
         console.print("[yellow]⚠️  No MovieClips found — will use subtitle timestamps as fallback[/yellow]")
 
-    # ── Step 3: Fetch subtitles (used as fallback context for Gemini) ─────────
+    # ── Step 3: Fetch subtitles ─────────────────────────────────────────────────
     console.print("\n[bold cyan]📝 Step 3: Fetching subtitles...[/bold cyan]")
     srt_ok = fetch_subtitles(title, srt_path, tmdb_id=tmdb_id)
     subtitle_text = ""
+    raw_srt = ""
     if srt_ok:
         subtitle_text = parse_srt_to_text(srt_path)
+        # Also load raw SRT for scene_analyzer (needs timestamps in SRT format)
+        with open(srt_path, "r", encoding="utf-8", errors="ignore") as f:
+            raw_srt = f.read()
         console.print(f"[dim]   Parsed {len(subtitle_text)} chars of subtitle text[/dim]")
     elif not movieclips:
         console.print("[red]❌ No subtitles and no MovieClips — cannot generate scripts[/red]")
@@ -147,12 +151,13 @@ def run_pipeline(
     console.print("\n[bold cyan]🤖 Step 5: Generating AI scripts...[/bold cyan]")
     scripts = generate_all_scripts(
         movie_title=title,
-        subtitle_text=subtitle_text,
+        subtitle_text=raw_srt if raw_srt else subtitle_text,
         overview=overview,
         clips=movieclips if movieclips else None,
         work_dir=work_dir,
         tmdb_meta=tmdb_meta,
     )
+
 
     if not scripts:
         console.print("[red]❌ No scripts generated[/red]")

@@ -244,15 +244,18 @@ def get_tmdb_metadata(movie_title: str, tmdb_id: int = 0) -> dict:
 def build_scene_context(scenes: list[dict], max_chars_per_scene: int = 300) -> str:
     """
     Format top scenes into a compact text block for Gemini.
-    Includes timestamp, score category and dialogue snippet.
+    Strips all quotes from dialogue to prevent JSON corruption.
     """
     lines = []
     for i, s in enumerate(scenes):
         cats = ", ".join(s.get("categories", {}).keys()) or "neutral"
-        snippet = s["text"][:max_chars_per_scene].replace("\n", " ")
+        # Strip ALL quotes from dialogue — they poison Gemini's JSON output
+        snippet = s["text"][:max_chars_per_scene]
+        snippet = snippet.replace('"', '').replace("'", '').replace('\n', ' ')
         lines.append(
-            f"[SCENE {i}] ⏱ {s['start_ts']} → {s['end_ts']} "
+            f"[SCENE {i}] {s['start_ts']} to {s['end_ts']} "
             f"| Emotion: {cats} | Score: {s['score']}\n"
-            f"  Dialogue: \"{snippet}...\""
+            f"  Dialogue: {snippet}"
         )
     return "\n\n".join(lines)
+

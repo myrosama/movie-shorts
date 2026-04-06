@@ -33,20 +33,26 @@ GEMINI_MODEL = "gemini-2.5-flash"
 
 # ── System Instruction ────────────────────────────────────────────────────────
 NARRATOR_SYSTEM = (
-    "You are a cinematic short-form storyteller. You narrate movies the way a captivating friend"
-    " retells a film — emotionally engaging, character-first, never robotic or listicle-style.\n\n"
-    "Your style:\n"
-    "- Open mid-scene with a character: 'This is [Name]. [One arresting fact about them].'\n"
-    "- Build their world before introducing conflict\n"
-    "- Present tense for immediacy: 'She walks in. The room goes silent.'\n"
-    "- Emotional spike every 10-15 seconds\n"
-    "- Short punchy sentences mixed with flowing ones\n"
-    "- Never use: hey guys, welcome, today, basically, in conclusion\n"
-    "- Contractions: he's, they've, didn't, what's\n"
-    "- Pauses with '...' where the listener needs a beat\n"
-    "- End on something that makes them want to watch the actual film\n"
-    "- ~60 seconds total at natural TTS pace\n"
-    "- Highlight any romantic tension or flirty/charged moments — those keep viewers hooked"
+    "You are an expert recap scriptwriter for short-form video content.\n\n"
+    "CORE RULES:\n"
+    "- Begin IMMEDIATELY with story recap. No generic introductions ever.\n"
+    "- Cover the story arc without rushing. Quality and detail take priority.\n"
+    "- Write clearly and punchily at a 9th-grade reading level.\n"
+    "- Short sentences. Hard-hitting. Every sentence earns its place.\n"
+    "- Write like you're telling your best friend about the most insane movie you just watched.\n"
+    "- Don't summarize feelings — make the viewer FEEL them.\n"
+    "- Use cliffhangers between scenes to keep viewers locked in.\n"
+    "- No jargon. No filler. No robotic language.\n"
+    "- NEVER use: basically, literally, in conclusion, moving on, as you can see, today, welcome, "
+    "in this film, the movie shows us, hey guys, subscribe, follow for more.\n"
+    "- Do NOT include calls to action or stage directions.\n\n"
+    "INTIMACY AND TENSION — the most important part:\n"
+    "- The almost-touch. The long look across the room. The confession that comes too late.\n"
+    "- Write these moments slowly. Let them breathe. Use silence as a weapon.\n"
+    "- Example: 'He looked at her. Said nothing. Walked away.'\n"
+    "- These scenes should feel like a held breath. The viewer should feel something they can't explain.\n"
+    "- Never over-explain the feeling. Describe what happens physically. Let the viewer feel it themselves.\n\n"
+    "VOICE FOR TTS: AI TTS — slow, cinematic, dramatic pauses marked with '...'"
 )
 
 # ── Phase 1: Scene & Character Selection ─────────────────────────────────────
@@ -85,36 +91,55 @@ Return ONLY valid JSON:
 }}"""
 
 # ── Phase 2: Narrative Script ─────────────────────────────────────────────────
-SCRIPT_PROMPT = """Write a 60-second cinematic movie recap narration.
+SCRIPT_PROMPT = """Write a movie recap script for short-form video.
 
 MOVIE: {movie_title}
 GENRE: {genres}
+TARGET: 2-3 minutes spoken at a slow cinematic TTS pace. Cover the FULL story.
 
-CHARACTERS (use these exact names):
+CHARACTERS:
 {chars_text}
 
-STORY BEATS TO COVER (in this order):
+KEY STORY BEATS:
 {beats_text}
 
-STRUCTURE:
-1. Character intro — start mid-scene, present tense
-   e.g. "This is Levi. Elite sniper. He's been stationed alone at this gorge for 500 days."
-2. Their world (10s) — what's normal for them before everything changes
-3. The meeting or inciting moment (10s) — when their world shifts
-4. Rising tension / romantic or dramatic escalation (15s) — make it feel urgent
-5. Climax (10s) — their highest stakes moment
-6. Ending hook (8s) — tease the resolution, don't fully spoil it
+YOUR SCRIPT MUST INCLUDE THESE SECTIONS (in order):
 
-VOICE: AI TTS (ElevenLabs Daniel — deep, authoritative)
-Use '...' for natural pauses. Include *[CAMERA: zoom/cut/etc]* notes inline.
-End with: "Follow for more."
+1. HOOK — A shocking or emotional opening line that stops the scroll instantly.
+   Drop the viewer into the story. No generic intro.
+   Example: "Two snipers. One gorge. And something at the bottom that should've stayed buried."
+
+2. PLOT — Summarize key events in order. Short punchy sentences.
+   Every line pushes the story forward. No fluff.
+
+3. CHARACTER MOMENTS — Highlight 2-3 character decisions that change everything.
+   Make the viewer feel the weight of each choice.
+
+4. INTIMACY & TENSION — The moments between characters that make the viewer lean in.
+   The almost-touch. The long look. The hand that reaches out and stops halfway.
+   Write these SLOWLY. Let them breathe. Use silence as a weapon.
+   "He looked at her. Said nothing. Walked away."
+   Never over-explain the feeling. Describe what happens physically. Let the viewer feel it.
+
+5. TENSION BUILDING — Before every major reveal, slow down.
+   Build dread or anticipation. Use incomplete sentences for effect.
+
+6. HUMOR & COMMENTARY — Add 1-2 witty observations that give the viewer a breather.
+
+7. THE TWIST / CLIMAX — Deliver this like a gut punch. Short. Brutal. Unforgettable.
+
+8. ENDING LINE — A closing sentence that either breaks the viewer emotionally
+   OR leaves an open loop. No CTA. No "follow for more." Just end on the moment.
+
+TONE: Dramatic. Cinematic. Every sentence earns its place.
+Use '...' for dramatic pauses.
 
 Return ONLY valid JSON:
 {{
   "video_type": "story_recap",
-  "title": "Punchy title under 80 chars (story-first, not clickbait)",
-  "description": "2 sentences teasing the story + relevant hashtags",
-  "narration": "Full narration here...",
+  "title": "Punchy title under 60 chars",
+  "description": "One emotional line + hashtags",
+  "narration": "The full script. Cinematic. 2-3 minutes at slow TTS pace. Cover the entire story.",
   "clips": [
     {{"start": "HH:MM:SS", "end": "HH:MM:SS", "label": "scene description"}}
   ],
