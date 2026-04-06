@@ -117,18 +117,41 @@ Return ONLY valid JSON:
 }}"""
 
 
+def _sanitize(text: str) -> str:
+    """Strip control characters and newlines that break JSON generation."""
+    if not text:
+        return ""
+    # Replace newlines/tabs with space, strip other control chars
+    text = re.sub(r'[\r\n\t]+', ' ', text)
+    text = re.sub(r'[\x00-\x1f\x7f]', '', text)
+    # Collapse multiple spaces
+    return re.sub(r' +', ' ', text).strip()
+
+
+def _parse_json(raw: str) -> dict:
+    """Strip markdown fences + control characters then parse JSON."""
+    if "```" in raw:
+        raw = re.sub(r'```(?:json)?\s*', '', raw)
+    # Remove all ASCII control characters except normal printable range
+    raw = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', raw)
+    raw = raw.strip()
+    return json.loads(raw)
+
+
 def generate_story_recap(movie_title, clips, overview=""):
     """Two-phase character-driven story recap generation."""
     console.print(f"[cyan]🤖 Generating story recap for '{movie_title}'...[/cyan]")
     client = _get_client()
 
-    # Build clips summary
+    # Build clean clips summary — sanitize all text coming from YouTube
     lines = ["AVAILABLE CLIPS:"]
     for i, c in enumerate(clips):
         d = int(c.get("duration", 0)); m, s = divmod(d, 60)
-        lines.append(f"[CLIP {i}] {m}m{s:02d}s | {c.get('title','')}")
-        if c.get("description"):
-            lines.append(f"         {c['description'].replace(chr(10),' ')[:180]}")
+        title = _sanitize(c.get("title", ""))
+        desc  = _sanitize(c.get("description", ""))[:180]
+        lines.append(f"[CLIP {i}] {m}m{s:02d}s | {title}")
+        if desc:
+            lines.append(f"         {desc}")
     clips_text = "\n".join(lines)
 
     # ── Phase 1: Extract characters and best clips ────────────────────────────
@@ -143,7 +166,7 @@ def generate_story_recap(movie_title, clips, overview=""):
             config=types.GenerateContentConfig(
                 temperature=0.2, max_output_tokens=1024,
                 response_mime_type="application/json"))
-        story_data = json.loads(r1.text.strip())
+        story_data = _parse_json(r1.text)
         characters = story_data.get("characters", [])
         selected   = story_data.get("selected_clips", [])
         console.print(f"[dim]   Characters found: {[c['name'] for c in characters]}[/dim]")
@@ -182,10 +205,7 @@ def generate_story_recap(movie_title, clips, overview=""):
                 system_instruction=NARRATOR_SYSTEM,
                 temperature=0.85, max_output_tokens=8192,
                 response_mime_type="application/json"))
-        raw = r2.text.strip()
-        if "```" in raw:
-            raw = re.sub(r"```(?:json)?\s*", "", raw).strip()
-        result = json.loads(raw)
+        result = _parse_json(r2.text)
         console.print(f"[green]✅ Narration: {len(result.get('narration',''))} chars[/green]")
         return result
     except Exception as e:
@@ -224,10 +244,7 @@ def generate_story_from_subtitles(movie_title, subtitle_text, overview=""):
                 system_instruction=NARRATOR_SYSTEM,
                 temperature=0.85, max_output_tokens=8192,
                 response_mime_type="application/json"))
-        raw = r.text.strip()
-        if "```" in raw:
-            raw = re.sub(r"```(?:json)?\s*", "", raw).strip()
-        result = json.loads(raw)
+        result = _parse_json(r.text)
         console.print(f"[green]✅ Narration: {len(result.get('narration',''))} chars[/green]")
         return result
     except Exception as e:
