@@ -1,16 +1,21 @@
 """
-script_generator.py
-────────────────────
-Uses Gemini 2.0 Flash (free tier) to analyze movie subtitles and generate
-4 narration scripts — each with timestamps for where to cut the video clips.
+script_generator.py  V3
+────────────────────────
+Character-driven story recap generator.
 
-Output per script: JSON with narration text + list of {start, end, label} clips
+Structure per video:
+  - Character intro: "This is [Name]. He/She is [role]..."
+  - Their world: set the scene and stakes
+  - The meeting / inciting incident
+  - Main conflict escalation
+  - Climax moment
+  - Ending (without fully spoiling — leave a hook)
+
+Two-phase Gemini:
+  Phase 1: Extract key characters and 5 best emotional scenes from clip metadata
+  Phase 2: Write the full character-driven narrative script
 """
-
-import os
-import sys
-import json
-import re
+import os, sys, json, re
 from google import genai
 from google.genai import types
 from rich.console import Console
@@ -19,7 +24,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 
 console = Console()
-
 _client = None
 
 def _get_client():
@@ -28,270 +32,235 @@ def _get_client():
         _client = genai.Client(api_key=config.GEMINI_API_KEY)
     return _client
 
-GEMINI_MODEL = "gemini-2.5-flash"  # Has free quota on this project
+GEMINI_MODEL = "gemini-2.5-flash"
 
+# ── System Instruction ────────────────────────────────────────────────────────
+NARRATOR_SYSTEM = (
+    "You are a cinematic short-form storyteller. You narrate movies the way a captivating friend"
+    " retells a film — emotionally engaging, character-first, never robotic or listicle-style."
+    "\n\nYour narration style:"
+    "\n- Always introduce the main character(s) as real people first: 'This is Marcus. He hasn't"
+    " slept in three days and he doesn't know why.'"
+    "\n- Build the world around them before introducing conflict"
+    "\n- Use present tense for immediacy: 'He walks in and the room goes dead silent.'"
+    "\n- Emotional spikes every 10-15 seconds — a reveal, a twist, a gut punch"
+    "\n- Short punchy sentences mixed with longer flowing ones"
+    "\n- Never use: 'Hey guys', 'welcome', 'today we', 'in conclusion', 'basically', 'literally'"
+    "\n- Natural spoken contractions: 'he's', 'they've', 'didn't', 'what's'"
+    "\n- Pauses marked with '...' where the listener needs to absorb something"
+    "\n- End on something that makes the viewer want to watch the actual movie"
+    "\n- Total read time: approximately 60 seconds (AI TTS at natural pace)"
+)
 
-# ─── Prompt Templates ────────────────────────────────────────────────────────
+# ── Phase 1: Character & Scene Extraction ────────────────────────────────────
+CHAR_EXTRACTOR_PROMPT = """You are analyzing movie clips to extract key story information.
 
-PROMPTS = {
-    "full_recap": """You are a viral short-form video scriptwriter for YouTube Shorts and TikTok.
+MOVIE: {movie_title}
+MOVIE OVERVIEW: {overview}
 
-Given the following movie subtitles with timestamps, write a 90-second NARRATION SCRIPT for:
-"The ENTIRE story of [MOVIE_TITLE] in 90 seconds"
+AVAILABLE CLIPS:
+{clips_summary}
 
-RULES:
-- Hook in the FIRST 5 words — make it impossible to scroll past
-- Write in SHORT, punchy sentences (max 10 words each)
-- Build tension → escalation → shocking resolution
-- Include [PAUSE] markers where the narrator should pause (1 second)
-- End with a gut-punch or twist reveal
-- NEVER give away the ending in the first 10 seconds
-- Tone: dramatic movie trailer narrator — deep, urgent
-
-MOVIE: [MOVIE_TITLE]
-OVERVIEW: [OVERVIEW]
-
-SUBTITLES (with timestamps):
-[SUBTITLES]
-
-Return ONLY valid JSON in this exact format:
-{
-  "video_type": "full_recap",
-  "title": "The ENTIRE story of [Movie Title] in 90 seconds 🎬",
-  "description": "YouTube description with 3-4 sentences + hashtags",
-  "narration": "Full narration script here...",
-  "clips": [
-    {"start": "00:05:23", "end": "00:05:45", "label": "Opening hook scene"},
-    {"start": "00:23:10", "end": "00:23:35", "label": "Main conflict begins"},
-    {"start": "00:45:00", "end": "00:45:20", "label": "Everything goes wrong"},
-    {"start": "01:12:30", "end": "01:13:00", "label": "Climax moment"},
-    {"start": "01:28:10", "end": "01:28:40", "label": "Final resolution"}
-  ],
-  "tags": ["movierecap", "moviesummary", "shorts"]
-}""",
-
-    "shocking_moments": """You are a viral short-form video scriptwriter for YouTube Shorts and TikTok.
-
-Given the following movie subtitles, write a 60-second narration script for:
-"[MOVIE_TITLE]'s 3 most jaw-dropping moments 🤯"
-
-RULES:
-- Start with: "This scene had people running out of theaters..."
-  OR "Nobody was ready for what happens at [timestamp]..."
-- Cover exactly 3 specific shocking/iconic moments
-- Each moment gets a 1-sentence setup + dramatic reveal
-- Use present tense for immediacy ("He walks in and...")
-- Reactions should feel visceral — "nobody saw this coming", "the room goes silent"
-- End with: "Which moment shocked YOU the most? Comment below 👇"
-
-MOVIE: [MOVIE_TITLE]
-OVERVIEW: [OVERVIEW]
-
-SUBTITLES (with timestamps):
-[SUBTITLES]
+Extract:
+1. The 2-3 MAIN characters (name, role, one-line personality description)
+2. The 5 most emotionally significant clips for telling the full story arc
+   (need: intro scene + conflict scene + climax scene + resolution scene)
 
 Return ONLY valid JSON:
-{
-  "video_type": "shocking_moments",
-  "title": "[Movie Title]'s 3 most insane moments 🤯 #shorts",
-  "description": "...",
-  "narration": "...",
-  "clips": [
-    {"start": "HH:MM:SS", "end": "HH:MM:SS", "label": "Moment 1"},
-    {"start": "HH:MM:SS", "end": "HH:MM:SS", "label": "Moment 2"},
-    {"start": "HH:MM:SS", "end": "HH:MM:SS", "label": "Moment 3"}
+{{
+  "characters": [
+    {{"name": "Character name", "role": "e.g. elite sniper", "trait": "one-line character essence"}},
+    {{"name": "Character name", "role": "e.g. former intelligence agent", "trait": "one-line character essence"}}
   ],
-  "tags": ["shocking", "moviemoments", "shorts"]
-}""",
+  "selected_clips": [
+    {{"clip_index": 0, "story_beat": "character intro", "reason": "Shows who they are before everything changes"}},
+    {{"clip_index": 2, "story_beat": "inciting incident", "reason": "The moment two worlds collide"}},
+    {{"clip_index": 4, "story_beat": "main conflict", "reason": "Stakes are highest here"}},
+    {{"clip_index": 6, "story_beat": "climax", "reason": "Everything comes to a head"}},
+    {{"clip_index": 7, "story_beat": "resolution/hook", "reason": "Leaves viewer wanting more"}}
+  ]
+}}"""
 
-    "ending_explained": """You are a viral short-form video scriptwriter for YouTube Shorts and TikTok.
+# ── Phase 2: Narrative Script ─────────────────────────────────────────────────
+SCRIPT_PROMPT = """Write a 60-second cinematic narration for this movie.
 
-Given the following movie subtitles, write a 60-second narration for:
-"The ending of [MOVIE_TITLE] EXPLAINED"
+MOVIE: {movie_title}
 
-RULES:
-- Start with: "The ending hits different when you realize..."
-  OR "Here's what actually happens at the end of [Movie]..."
-- Explain WHAT happened + WHY it matters + what it means for the characters
-- Include any hidden symbolism or foreshadowing paid off
-- Don't just describe events — explain the MEANING
-- End: "Did you catch this the first time? Drop a 🔥 if you did"
+MAIN CHARACTERS:
+{characters_text}
 
-MOVIE: [MOVIE_TITLE]
-OVERVIEW: [OVERVIEW]
+STORY BEATS TO COVER (in order):
+{beats_text}
 
-SUBTITLES (with timestamps):
-[SUBTITLES]
+STRUCTURE TO FOLLOW:
+1. Open with character intro (not a hook question — start mid-story, present tense)
+   Example: "This is Levi. Elite sniper. Stationed alone at a gorge no one's supposed to know about."
+2. Establish their world and what's at stake (10-15 seconds)
+3. The meeting or inciting incident — when their world changes (10 seconds)
+4. Main conflict builds — tension escalates (15 seconds)  
+5. Climax moment — the peak emotional beat (10 seconds)
+6. Ending hook — don't fully spoil, leave them wanting the movie (5-8 seconds)
+   Example: "And what they find at the bottom of that gorge... changes everything."
+
+Platform: TikTok / YouTube Shorts / Instagram Reels
+Voice: AI TTS (ElevenLabs) — use '...' for natural pauses
+CTA at the end: "Follow for more movie recaps."
 
 Return ONLY valid JSON:
-{
-  "video_type": "ending_explained",
-  "title": "The ending of [Movie Title] EXPLAINED 👁️ #shorts",
-  "description": "...",
-  "narration": "...",
-  "clips": [
-    {"start": "HH:MM:SS", "end": "HH:MM:SS", "label": "Final act setup"},
-    {"start": "HH:MM:SS", "end": "HH:MM:SS", "label": "The ending revelation"},
-    {"start": "HH:MM:SS", "end": "HH:MM:SS", "label": "Post-credits / final shot"}
-  ],
-  "tags": ["endingexplained", "movieending", "shorts"]
-}""",
-
-    "hidden_details": """You are a viral short-form video scriptwriter for YouTube Shorts and TikTok.
-
-Given the following movie subtitles, write a 45-second narration for:
-"You missed THIS detail in [MOVIE_TITLE]"
-
-RULES:
-- Start with: "Most people watch this 3 times before they notice..."
-  OR "There's a detail in [Movie] that changes everything..."
-- Focus on 1-2 subtle details: hidden foreshadowing, background clues, plot holes explained, subtle callbacks
-- Make the viewer feel SMART for watching this
-- End: "Rewatch this scene. You'll never see it the same way again."
-
-MOVIE: [MOVIE_TITLE]
-OVERVIEW: [OVERVIEW]
-
-SUBTITLES (with timestamps):
-[SUBTITLES]
-
-Return ONLY valid JSON:
-{
-  "video_type": "hidden_details",
-  "title": "You missed THIS in [Movie Title] 👀 #shorts",
-  "description": "...",
-  "narration": "...",
-  "clips": [
-    {"start": "HH:MM:SS", "end": "HH:MM:SS", "label": "The hidden detail scene"},
-    {"start": "HH:MM:SS", "end": "HH:MM:SS", "label": "Callback / payoff"}
-  ],
-  "tags": ["moviedetails", "youmissed", "shorts"]
-}""",
-}
+{{
+  "video_type": "story_recap",
+  "title": "Short punchy YouTube title that teases the story (max 80 chars)",
+  "description": "2 sentence teaser + 5 hashtags",
+  "narration": "Full 60-second spoken narration. Include *[CAMERA: zoom / cut / etc]* notes for the editor. Use ... for pauses.",
+  "clip_order": [0, 1, 2, 3, 4],
+  "tags": ["movierecap", "shorts", "{safetitle}", "movieclips", "mustwatch"]
+}}"""
 
 
-def _truncate_subtitles(subtitle_text: str, max_chars: int = 25_000) -> str:
-    """Truncate subtitles to fit within Gemini context window while keeping structure."""
-    if len(subtitle_text) <= max_chars:
-        return subtitle_text
-    # Keep the beginning (setup) and end (climax/resolution) — most important for all 4 types
-    half = max_chars // 3
-    return subtitle_text[:half * 2] + "\n...[middle condensed]...\n" + subtitle_text[-half:]
+def generate_story_recap(movie_title, clips, overview=""):
+    """Two-phase character-driven story recap generation."""
+    console.print(f"[cyan]🤖 Generating story recap for '{movie_title}'...[/cyan]")
+    client = _get_client()
+
+    # Build clips summary
+    lines = ["AVAILABLE CLIPS:"]
+    for i, c in enumerate(clips):
+        d = int(c.get("duration", 0)); m, s = divmod(d, 60)
+        lines.append(f"[CLIP {i}] {m}m{s:02d}s | {c.get('title','')}")
+        if c.get("description"):
+            lines.append(f"         {c['description'].replace(chr(10),' ')[:180]}")
+    clips_text = "\n".join(lines)
+
+    # ── Phase 1: Extract characters and best clips ────────────────────────────
+    p1 = CHAR_EXTRACTOR_PROMPT.format(
+        movie_title=movie_title,
+        overview=overview or "Not available",
+        clips_summary=clips_text,
+    )
+    try:
+        r1 = client.models.generate_content(
+            model=GEMINI_MODEL, contents=p1,
+            config=types.GenerateContentConfig(
+                temperature=0.2, max_output_tokens=1024,
+                response_mime_type="application/json"))
+        story_data = json.loads(r1.text.strip())
+        characters = story_data.get("characters", [])
+        selected   = story_data.get("selected_clips", [])
+        console.print(f"[dim]   Characters found: {[c['name'] for c in characters]}[/dim]")
+        console.print(f"[dim]   Story beats selected: {len(selected)} clips[/dim]")
+    except Exception as e:
+        console.print(f"[yellow]⚠️  Phase 1 fallback: {e}[/yellow]")
+        characters = []
+        selected = [{"clip_index": i, "story_beat": "scene", "reason": ""} for i in range(min(len(clips), 5))]
+
+    # Build text for phase 2
+    chars_text = "\n".join(
+        f"- {c['name']}: {c['role']} — {c.get('trait','')}"
+        for c in characters
+    ) or f"- Main characters from {movie_title}"
+
+    beats_text = "\n".join(
+        f"- Beat {i+1} [{s.get('story_beat','scene')}]: "
+        f"Clip {s.get('clip_index',i)} — {clips[s.get('clip_index',i)]['title'][:70] if s.get('clip_index',0) < len(clips) else ''}"
+        f" ({s.get('reason','')})"
+        for i, s in enumerate(selected)
+    )
+
+    safe_title = re.sub(r'[^a-zA-Z0-9]', '', movie_title).lower()
+
+    # ── Phase 2: Write the narrative script ──────────────────────────────────
+    p2 = SCRIPT_PROMPT.format(
+        movie_title=movie_title,
+        characters_text=chars_text,
+        beats_text=beats_text,
+        safetitle=safe_title,
+    )
+    try:
+        r2 = client.models.generate_content(
+            model=GEMINI_MODEL, contents=p2,
+            config=types.GenerateContentConfig(
+                system_instruction=NARRATOR_SYSTEM,
+                temperature=0.85, max_output_tokens=8192,
+                response_mime_type="application/json"))
+        raw = r2.text.strip()
+        if "```" in raw:
+            raw = re.sub(r"```(?:json)?\s*", "", raw).strip()
+        result = json.loads(raw)
+        console.print(f"[green]✅ Narration: {len(result.get('narration',''))} chars[/green]")
+        return result
+    except Exception as e:
+        console.print(f"[red]❌ Script generation failed: {e}[/red]")
+        return None
 
 
-def generate_script(
-    video_type: str,
-    movie_title: str,
-    subtitle_text: str,
-    overview: str = "",
-) -> dict | None:
-    """
-    Generate a narration script for one video type using Gemini.
-    Returns parsed JSON dict or None on failure.
-    """
-    if video_type not in PROMPTS:
-        raise ValueError(f"Unknown video type: {video_type}")
+def generate_story_from_subtitles(movie_title, subtitle_text, overview=""):
+    """Fallback when no clips available — use subtitle timestamps."""
+    console.print(f"[yellow]📝 Subtitle fallback for '{movie_title}'...[/yellow]")
+    client = _get_client()
 
-    console.print(f"[cyan]🤖 Generating script: {video_type} for '{movie_title}'...[/cyan]")
+    safe_title = re.sub(r'[^a-zA-Z0-9]', '', movie_title).lower()
 
     prompt = (
-        PROMPTS[video_type]
-        .replace("[MOVIE_TITLE]", movie_title)
-        .replace("[OVERVIEW]", overview or "")
-        .replace("[SUBTITLES]", _truncate_subtitles(subtitle_text))
+        f"Movie: {movie_title}\nOverview: {overview or 'Not available'}\n\n"
+        f"Subtitles (with timestamps):\n{subtitle_text[:22000]}\n\n"
+        f"Write a 60-second character-driven narration for this movie following this structure:\n"
+        f"1. Introduce the main character(s) by name and role\n"
+        f"2. Establish their world and what's at stake\n"
+        f"3. The inciting incident that changes everything\n"
+        f"4. Main conflict escalation\n"
+        f"5. Climax moment\n"
+        f"6. Ending hook that leaves them wanting to watch\n\n"
+        f"Return ONLY valid JSON:\n"
+        f'{{"video_type":"story_recap","title":"Short punchy title max 80 chars",'
+        f'"description":"2 sentence teaser + hashtags",'
+        f'"narration":"Full 60s narration with *[CAMERA: notes]* and ... pauses. CTA at end.",'
+        f'"clips":[{{"start":"HH:MM:SS","end":"HH:MM:SS","label":"scene desc"}}],'
+        f'"tags":["movierecap","shorts","{safe_title}","movieclips","mustwatch"]}}'
     )
-
     try:
-        client = _get_client()
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
+        r = client.models.generate_content(
+            model=GEMINI_MODEL, contents=prompt,
             config=types.GenerateContentConfig(
-                temperature=0.8,
-                max_output_tokens=8192,
-                response_mime_type="application/json",
-            ),
-        )
-        raw = response.text.strip()
-
-        # Strip markdown code fences if present
-        if '```' in raw:
-            # Remove ```json ... ``` wrapping
-            raw = re.sub(r'```(?:json)?\s*', '', raw).strip()
-
-        # Try direct parse first, then regex extraction
-        try:
-            result = json.loads(raw)
-        except json.JSONDecodeError:
-            json_match = re.search(r'\{[\s\S]+\}', raw)
-            if not json_match:
-                console.print(f"[red]❌ No JSON found in Gemini response[/red]")
-                console.print(f"[dim]{raw[:200]}[/dim]")
-                return None
-            try:
-                result = json.loads(json_match.group())
-            except json.JSONDecodeError:
-                # Last resort: truncated JSON — try to find last complete field
-                console.print(f"[red]❌ JSON truncated or malformed — try reducing subtitle size[/red]")
-                return None
-
-        console.print(f"[green]✅ Script generated: {len(result.get('narration', ''))} chars, "
-                      f"{len(result.get('clips', []))} clips[/green]")
+                system_instruction=NARRATOR_SYSTEM,
+                temperature=0.85, max_output_tokens=8192,
+                response_mime_type="application/json"))
+        raw = r.text.strip()
+        if "```" in raw:
+            raw = re.sub(r"```(?:json)?\s*", "", raw).strip()
+        result = json.loads(raw)
+        console.print(f"[green]✅ Narration: {len(result.get('narration',''))} chars[/green]")
         return result
-
-    except json.JSONDecodeError as e:
-        console.print(f"[red]❌ JSON parse error: {e}[/red]")
-        return None
     except Exception as e:
-        console.print(f"[red]❌ Gemini API error: {e}[/red]")
+        console.print(f"[red]❌ Subtitle fallback failed: {e}[/red]")
         return None
 
 
-def generate_all_scripts(
-    movie_title: str,
-    subtitle_text: str,
-    overview: str = "",
-    output_dir: str = None,
-) -> dict[str, dict]:
-    """
-    Generate all 4 scripts for a movie.
-    Returns dict of {video_type: script_dict}
-    Optionally saves each script as a JSON file to output_dir.
-    """
+def generate_all_scripts(movie_title, subtitle_text, overview="", clips=None, work_dir=""):
+    """Generate story_recap script. Cache to disk."""
     results = {}
-    for vtype in config.VIDEO_TYPES:
-        script = generate_script(vtype, movie_title, subtitle_text, overview)
-        if script:
-            results[vtype] = script
-            if output_dir:
-                os.makedirs(output_dir, exist_ok=True)
-                path = os.path.join(output_dir, f"{vtype}_script.json")
-                with open(path, "w") as f:
-                    json.dump(script, f, indent=2)
-                console.print(f"[dim]💾 Saved: {path}[/dim]")
+    scripts_dir = os.path.join(work_dir, "scripts") if work_dir else "temp/scripts"
+    os.makedirs(scripts_dir, exist_ok=True)
+
+    for vt in config.VIDEO_TYPES:
+        cache = os.path.join(scripts_dir, f"{vt}_script.json")
+        if os.path.exists(cache):
+            with open(cache) as f:
+                results[vt] = json.load(f)
+            console.print(f"[dim]⏭️  Cached script: {vt}[/dim]")
+            continue
+
+        if clips:
+            script = generate_story_recap(movie_title, clips, overview)
         else:
-            console.print(f"[yellow]⚠️  Failed to generate script for: {vtype}[/yellow]")
+            script = generate_story_from_subtitles(movie_title, subtitle_text, overview)
 
-    console.print(f"\n[bold green]✅ Generated {len(results)}/4 scripts for '{movie_title}'[/bold green]")
+        if script:
+            results[vt] = script
+            with open(cache, "w") as f:
+                json.dump(script, f, indent=2, ensure_ascii=False)
+            console.print(f"[dim]💾 Saved: {cache}[/dim]")
+        else:
+            console.print(f"[yellow]⚠️  Failed: {vt}[/yellow]")
+
+    console.print(f"\n[bold green]✅ Generated {len(results)}/{len(config.VIDEO_TYPES)} scripts[/bold green]")
     return results
-
-
-if __name__ == "__main__":
-    # Quick test with a fake subtitle
-    test_srt = """[00:01:00] A young man arrives in a strange city.
-[00:05:30] He discovers a dark secret about his past.
-[00:15:00] The truth begins to unravel — nothing is what it seems.
-[00:45:00] The villain reveals himself. Everything was planned.
-[01:15:00] In a desperate final move, he risks everything.
-[01:25:00] The twist nobody saw coming — he was the villain all along."""
-
-    scripts = generate_all_scripts(
-        movie_title="Test Movie",
-        subtitle_text=test_srt,
-        overview="A man discovers he is not who he thinks he is.",
-        output_dir="temp/test_scripts",
-    )
-    for vtype, s in scripts.items():
-        print(f"\n--- {vtype} ---")
-        print(f"Title: {s.get('title')}")
-        print(f"Narration preview: {s.get('narration', '')[:200]}...")

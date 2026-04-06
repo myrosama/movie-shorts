@@ -33,6 +33,7 @@ from rich.table import Table
 # Pipeline modules
 from pipeline.movie_selector   import select_movie, get_movie_genre, mark_processed
 from pipeline.subtitle_fetcher import fetch_subtitles, parse_srt_to_text
+from pipeline.clip_scraper     import search_and_download_clips
 from pipeline.script_generator import generate_all_scripts
 from pipeline.voice_synthesizer import synthesize_all_scripts
 from pipeline.video_assembler   import assemble_all_videos
@@ -111,27 +112,44 @@ def run_pipeline(
 
     console.print(f"[green]✅ Movie file: {movie_file}[/green]")
 
-    # ── Step 2: Fetch subtitles ───────────────────────────────────────────────
-    console.print("\n[bold cyan]📝 Step 2: Fetching subtitles...[/bold cyan]")
+    # ── Step 2: Download MovieClips from YouTube ──────────────────────────────
+    console.print("\n[bold cyan]🎬 Step 2: Fetching MovieClips from YouTube...[/bold cyan]")
+    clips_dir = os.path.join(work_dir, "movieclips")
+    movieclips = search_and_download_clips(title, clips_dir)
+    if movieclips:
+        console.print(f"[green]✅ {len(movieclips)} MovieClips ready[/green]")
+    else:
+        console.print("[yellow]⚠️  No MovieClips found — will use subtitle timestamps as fallback[/yellow]")
+
+    # ── Step 3: Fetch subtitles (used as fallback context for Gemini) ─────────
+    console.print("\n[bold cyan]📝 Step 3: Fetching subtitles...[/bold cyan]")
     srt_ok = fetch_subtitles(title, srt_path, tmdb_id=tmdb_id)
-    if not srt_ok:
-        console.print("[red]❌ Could not fetch subtitles. Cannot generate scripts without them.[/red]")
+    subtitle_text = ""
+    if srt_ok:
+        subtitle_text = parse_srt_to_text(srt_path)
+        console.print(f"[dim]   Parsed {len(subtitle_text)} chars of subtitle text[/dim]")
+    elif not movieclips:
+        console.print("[red]❌ No subtitles and no MovieClips — cannot generate scripts[/red]")
         return False
+    else:
+        console.print("[yellow]⚠️  No subtitles — using MovieClips only[/yellow]")
 
-    subtitle_text = parse_srt_to_text(srt_path)
-    console.print(f"[dim]   Parsed {len(subtitle_text)} chars of subtitle text[/dim]")
-
-    # ── Step 3: Generate AI scripts ───────────────────────────────────────────
-    console.print("\n[bold cyan]🤖 Step 3: Generating AI scripts...[/bold cyan]")
-    scripts_dir = os.path.join(work_dir, "scripts")
-    scripts = generate_all_scripts(title, subtitle_text, overview, scripts_dir)
+    # ── Step 4: Generate AI scripts ───────────────────────────────────────────
+    console.print("\n[bold cyan]🤖 Step 4: Generating AI scripts...[/bold cyan]")
+    scripts = generate_all_scripts(
+        movie_title=title,
+        subtitle_text=subtitle_text,
+        overview=overview,
+        clips=movieclips if movieclips else None,
+        work_dir=work_dir,
+    )
 
     if not scripts:
         console.print("[red]❌ No scripts generated[/red]")
         return False
 
-    # ── Step 4: Synthesize voice ──────────────────────────────────────────────
-    console.print("\n[bold cyan]🎙️  Step 4: Synthesizing voice...[/bold cyan]")
+    # ── Step 5: Synthesize voice ──────────────────────────────────────────────
+    console.print("\n[bold cyan]🎙️  Step 5: Synthesizing voice...[/bold cyan]")
     audio_dir   = os.path.join(work_dir, "audio")
     audio_paths = synthesize_all_scripts(scripts, title, audio_dir, genre)
 
@@ -139,45 +157,23 @@ def run_pipeline(
         console.print("[red]❌ Voice synthesis failed[/red]")
         return False
 
-    # ── Step 5: Assemble videos (SHORT + LONG versions) ───────────────────────
-    console.print("\n[bold cyan]🎬 Step 5: Assembling videos...[/bold cyan]")
-    all_video_files = {}
+    # ── Step 6: Assemble videos ───────────────────────────────────────────────
+    console.print("\n[bold cyan]🎬 Step 6: Assembling videos...[/bold cyan]")
+    video_files = assemble_all_videos(
+        movie_path=movie_file,
+        scripts=scripts,
+        audio_paths=audio_paths,
+        movie_title=title,
+        output_dir=out_dir,
+        movieclips=movieclips if movieclips else None,
+    )
 
-    for version, version_config in config.VIDEO_VERSIONS.items():
-        console.print(f"\n[bold]  Version: {version.upper()} "
-                      f"({version_config['min']}–{version_config['max']}s) "
-                      f"→ {', '.join(version_config['platforms'])}[/bold]")
-
-        version_out_dir  = os.path.join(out_dir, version)
-        version_work_dir = os.path.join(work_dir, version)
-
-        # Scale audio speed for long version: same script but longer target
-        # achieved by using a slower Kokoro speed for the long version
-        version_audio = audio_paths
-        if version == "long":
-            # Re-synthesize at slower speed to fill the longer target naturally
-            from pipeline.voice_synthesizer import synthesize_all_scripts as resynth
-            long_audio_dir = os.path.join(work_dir, "audio_long")
-            import config as _cfg
-            orig_speed = _cfg.KOKORO_SPEED
-            _cfg.KOKORO_SPEED = 0.9  # Slower = longer audio to fill 65-75s target
-            version_audio = resynth(scripts, title, long_audio_dir, genre)
-            _cfg.KOKORO_SPEED = orig_speed
-
-        video_files = assemble_all_videos(
-            movie_path=movie_file,
-            scripts=scripts,
-            audio_paths=version_audio,
-            movie_title=title,
-            output_dir=version_out_dir,
-        )
-
-        for vtype, path in video_files.items():
-            all_video_files[f"{vtype}_{version}"] = path
-
-    if not all_video_files:
+    if not video_files:
         console.print("[red]❌ No videos assembled[/red]")
         return False
+
+    all_video_files = video_files
+
 
     # ── Step 6: Print summary table ───────────────────────────────────────────
     table = Table(title=f"Generated Videos — {title}")

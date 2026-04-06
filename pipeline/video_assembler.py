@@ -186,16 +186,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return True
 
 
-def get_background_music() -> str | None:
-    """Return path to a random background music track, or None."""
+
+def get_background_music(video_type: str = "full_recap") -> str | None:
+    """Return path to the correct music track for this video type."""
+    mood = config.VIDEO_TYPE_MUSIC.get(video_type, "normal")
+    track_path = config.MUSIC_TRACKS.get(mood)
+    if track_path and os.path.exists(track_path):
+        return track_path
+    # Fallback: any available track
     music_dir = config.MUSIC_DIR
-    if not os.path.exists(music_dir):
-        return None
-    tracks = [f for f in os.listdir(music_dir) if f.endswith(('.mp3', '.wav', '.m4a'))]
-    if not tracks:
-        return None
-    import random
-    return os.path.join(music_dir, random.choice(tracks))
+    if os.path.exists(music_dir):
+        tracks = [f for f in os.listdir(music_dir) if f.endswith(('.mp3', '.wav', '.m4a'))]
+        if tracks:
+            import random
+            return os.path.join(music_dir, random.choice(tracks))
+    return None
 
 
 def assemble_video(
@@ -205,116 +210,76 @@ def assemble_video(
     narration: str,
     output_path: str,
     work_dir: str,
+    video_type: str = "full_recap",
+    clip_files: list[str] | None = None,
 ) -> bool:
     """
-    Full video assembly pipeline:
-    1. Extract clips at timestamps
-    2. Apply copyright rules (cut into 3s, delete alternates, flip alternates, speed)
-    3. Concatenate surviving clips
-    4. Overlay narration audio + background music
-    5. Burn ASS captions
-    6. Output final vertical video
+    Full video assembly pipeline.
 
     Args:
-        movie_path:  Source .mp4 movie file
-        audio_path:  Narration .wav from Kokoro TTS
-        clips:       List of {start, end, label} dicts from script
-        narration:   Narration text (for captions)
+        movie_path:  Source movie file (mkv/mp4). Used when clip_files is None.
+        audio_path:  Narration .mp3 from ElevenLabs
+        clips:       List of {start, end, label} dicts (used when no clip_files)
+        narration:   Narration text for captions
         output_path: Final output file path
         work_dir:    Temporary working directory
+        video_type:  Used for music selection
+        clip_files:  Pre-downloaded clip files (from MovieClips). Overrides clips+movie.
     """
     os.makedirs(work_dir, exist_ok=True)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
     console.print(f"[cyan]🎬 Assembling video → {os.path.basename(output_path)}[/cyan]")
-    console.print(f"[dim]   Source clips: {len(clips)}, Movie: {os.path.basename(movie_path)}[/dim]")
 
-    # ── Step 1: Get narration duration (drives target video length) ──────────
+    # ── Step 1: Get narration duration via ffprobe ────────────────────────────
     try:
-        import soundfile as sf
-        data, sr = sf.read(audio_path)
-        narration_duration = len(data) / sr
+        probe_out = subprocess.check_output([
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", audio_path
+        ])
+        narration_duration = float(probe_out.decode().strip())
     except Exception:
-        narration_duration = 35.0  # Safe default ~35s
-    console.print(f"[dim]   Narration duration: {narration_duration:.1f}s[/dim]")
+        narration_duration = 35.0
+    console.print(f"[dim]   Narration: {narration_duration:.1f}s[/dim]")
 
-    # ── Step 2: Extract raw clips from movie ────────────────────────────────
+    # ── Step 2: Get raw clips (MovieClips files OR extract from movie) ────────
     raw_clips = []
-    for i, clip in enumerate(clips):
-        start = _ts_to_seconds(clip.get("start", "0"))
-        end   = _ts_to_seconds(clip.get("end", "0"))
-        if end <= start:
-            continue
 
-        raw_path = os.path.join(work_dir, f"raw_{i:03d}.mp4")
-        if extract_clip(movie_path, start, end, raw_path):
-            raw_clips.append(raw_path)
-
-    if not raw_clips:
-        console.print("[red]❌ No clips extracted[/red]")
+    if clip_files:
+        # Use pre-downloaded MovieClips — already the best curated scenes
+        console.print(f"[dim]   Using {len(clip_files)} pre-downloaded MovieClips[/dim]")
+        raw_clips = [f for f in clip_files if os.path.exists(f)]
+    elif clips and movie_path and os.path.exists(movie_path):
+        # Extract clips from full movie at specified timestamps
+        console.print(f"[dim]   Extracting {len(clips)} clips from movie file[/dim]")
+        for i, clip in enumerate(clips):
+            start = _ts_to_seconds(clip.get("start", "0"))
+            end   = _ts_to_seconds(clip.get("end", "0"))
+            if end <= start:
+                continue
+            raw_path = os.path.join(work_dir, f"raw_{i:03d}.mp4")
+            if extract_clip(movie_path, start, end, raw_path):
+                raw_clips.append(raw_path)
+    else:
+        console.print("[red]❌ No clip source available (no clip_files and no movie path)[/red]")
         return False
 
-    console.print(f"[dim]   Extracted {len(raw_clips)} raw clips[/dim]")
+    if not raw_clips:
+        console.print("[red]❌ No clips to assemble[/red]")
+        return False
 
-    # ── Step 3: Slice each raw clip into 3-second segments (RULE 2: CUT) ────
-    three_sec_clips = []
-    for raw_path in raw_clips:
-        # Get duration of this clip
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", raw_path],
-            capture_output=True, text=True
-        )
-        try:
-            clip_dur = float(probe.stdout.strip())
-        except Exception:
-            clip_dur = 10.0
-
-        seg_duration = 3.0
-        offset = 0.0
-        seg_idx = 0
-        while offset < clip_dur:
-            seg_path = os.path.join(
-                work_dir,
-                f"seg_{len(three_sec_clips):04d}.mp4"
-            )
-            actual_dur = min(seg_duration, clip_dur - offset)
-            ok = ffmpeg([
-                "-ss", str(offset),
-                "-i", raw_path,
-                "-t", str(actual_dur),
-                "-c:v", "copy", "-an",
-                seg_path,
-            ])
-            if ok and os.path.exists(seg_path):
-                three_sec_clips.append((seg_path, seg_idx))
-                seg_idx += 1
-            offset += seg_duration
-
-    console.print(f"[dim]   Sliced into {len(three_sec_clips)} × 3s segments[/dim]")
-
-    # ── Step 4: RULE 3 — Delete alternate segments (keep 0,2,4... drop 1,3,5) ──
-    kept_clips = [
-        (path, seg_idx)
-        for path, seg_idx in three_sec_clips
-        if seg_idx % 2 == 0   # Keep even-indexed segments, delete odd
-    ]
-    console.print(f"[dim]   After alternating delete: {len(kept_clips)} segments kept[/dim]")
-
-    if not kept_clips:
-        console.print("[red]❌ All clips were deleted — using all segments[/red]")
-        kept_clips = three_sec_clips[:8]  # Fallback
-
-    # ── Step 5: Apply copyright rules + scale to each kept clip ─────────────
+    # ── Step 3: Apply copyright transforms at clip level (no destructive splitting) ──
+    # We apply: flip alternates, 3% speed, color grade, scale to 9:16
+    # NOT slicing into 3s chunks — that destroyed scene continuity
     processed_clips = []
-    for i, (clip_path, seg_idx) in enumerate(kept_clips):
+    for i, clip_path in enumerate(raw_clips):
         out_path = os.path.join(work_dir, f"proc_{i:04d}.mp4")
         if apply_copyright_rules(clip_path, out_path, i):
             processed_clips.append(out_path)
 
     console.print(f"[dim]   Processed {len(processed_clips)} clips[/dim]")
 
-    # ── Step 6: Create concat list and join all clips ────────────────────────
+    # ── Step 4: Concatenate all processed clips ───────────────────────────────
     concat_list = os.path.join(work_dir, "concat.txt")
     with open(concat_list, "w") as f:
         for p in processed_clips:
@@ -330,12 +295,12 @@ def assemble_video(
     ], "Concatenating clips"):
         return False
 
-    # ── Step 7: Generate ASS caption file ───────────────────────────────────
+    # ── Step 5: Generate ASS captions ────────────────────────────────────────
     ass_path = os.path.join(work_dir, "captions.ass")
     generate_ass_subtitles(narration, narration_duration, ass_path)
 
-    # ── Step 8: Mix narration + background music + burn captions ────────────
-    bg_music = get_background_music()
+    # ── Step 6: Mix audio + burn captions + render final video ──────────────
+    bg_music = get_background_music(video_type)
 
     # Build audio filter graph
     if bg_music:
@@ -388,12 +353,10 @@ def assemble_all_videos(
     audio_paths: dict,
     movie_title: str,
     output_dir: str,
+    movieclips: list[dict] | None = None,
 ) -> dict[str, str]:
     """
-    Assemble all video types for a movie.
-
-    Returns:
-        Dict of {video_type: output_path} for successfully assembled videos
+    Assemble all video types. Accepts optional pre-downloaded movieclips list.
     """
     results = {}
     safe_title = re.sub(r'[^\w\s-]', '', movie_title).strip().replace(' ', '_')
@@ -417,6 +380,18 @@ def assemble_all_videos(
             continue
 
         console.print(f"\n[bold cyan]━━━ Assembling: {video_type} ━━━[/bold cyan]")
+
+        # Resolve clip files if MovieClips were downloaded
+        clip_files_for_type = None
+        if movieclips:
+            # Use clips in the order specified by script's clip_order
+            clip_order = script.get("clip_order", list(range(len(movieclips))))
+            clip_files_for_type = [
+                movieclips[i]["path"]
+                for i in clip_order
+                if i < len(movieclips) and os.path.exists(movieclips[i]["path"])
+            ]
+
         ok = assemble_video(
             movie_path=movie_path,
             audio_path=audio,
@@ -424,6 +399,8 @@ def assemble_all_videos(
             narration=script.get("narration", ""),
             output_path=output_path,
             work_dir=work_dir,
+            video_type=video_type,
+            clip_files=clip_files_for_type,
         )
         if ok:
             results[video_type] = output_path

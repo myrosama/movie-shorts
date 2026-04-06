@@ -12,6 +12,7 @@ load_dotenv()
 GEMINI_API_KEY       = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
 TMDB_API_KEY         = os.getenv("TMDB_API_KEY", "YOUR_TMDB_API_KEY_HERE")  # Free at themoviedb.org
 OPENSUBTITLES_API_KEY = os.getenv("OPENSUBTITLES_API_KEY", "YOUR_OPENSUBS_KEY_HERE")  # Free
+ELEVENLABS_API_KEY   = os.getenv("ELEVENLABS_API_KEY", "")
 
 # YouTube OAuth2 — path to the client_secrets.json you download from Google Cloud Console
 YOUTUBE_CLIENT_SECRETS = os.getenv("YOUTUBE_CLIENT_SECRETS", "client_secrets.json")
@@ -29,7 +30,7 @@ VIDEO_FPS = 30
 MAX_CLIP_DURATION = 30          # Max seconds per individual clip (fair use)
 
 # Video types to generate per movie
-VIDEO_TYPES = ["full_recap", "shocking_moments", "ending_explained", "hidden_details"]
+VIDEO_TYPES = ["story_recap"]
 
 # ─── Platform Monetization Rules ────────────────────────────────────────────
 # TikTok Creator Rewards: MINIMUM 60 seconds to earn anything
@@ -62,14 +63,28 @@ VIDEO_DURATIONS = {
 }
 
 # ─── Voice Settings ──────────────────────────────────────────────────────────
-# Kokoro TTS voice per genre
-KOKORO_VOICES = {
-    "default":  "bm_george",   # Deep British male — great for most movies
-    "romance":  "af_sky",      # Warm female narrator
-    "horror":   "bm_lewis",    # Darker male voice
-    "comedy":   "af_nicole",   # Lighter female voice
+# ElevenLabs voice IDs per genre
+ELEVENLABS_VOICES = {
+    "default":  "JxfH70f7jvYhi0DKD8Xs",   # Josh — energetic, punchy, great for recaps
+    "romance":  "EXAVITQu4vr4xnSDxMaL",   # Sarah — warm, mature
+    "horror":   "IKne3meq5aSn9XLyUdCD",   # Charlie — deep, intense
+    "comedy":   "FGY2WhTYpPnrIDTdsKH5",   # Laura — quirky, fun
 }
-KOKORO_SPEED = 1.1              # Slightly faster for punchy shorts pacing
+
+# ─── Music Settings ───────────────────────────────────────────────────────────
+# Drop your music files into assets/music/ with these names:
+MUSIC_TRACKS = {
+    "dramatic": "assets/music/dramatic.mp3",
+    "happy":    "assets/music/happy.mp3",
+    "normal":   "assets/music/normal.mp3",
+}
+# Which music mood to use for each video type
+VIDEO_TYPE_MUSIC = {
+    "full_recap":       "normal",
+    "shocking_moments": "dramatic",
+    "ending_explained": "dramatic",
+    "hidden_details":   "happy",
+}
 
 # ─── Copyright Shield Settings ───────────────────────────────────────────────
 # Applied by copyright_shield.py

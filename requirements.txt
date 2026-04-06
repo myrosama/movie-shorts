@@ -1,26 +1,21 @@
 # AI Movie Shorts Pipeline - Dependencies
 
-# Gemini API (new SDK — replaces deprecated google-generativeai)
+# Gemini API
 google-genai>=1.0.0
 
-# Kokoro TTS (free local voice synthesis)
-kokoro>=0.9.4
-soundfile>=0.12.1
+# ElevenLabs TTS
+requests>=2.31.0
 
-# Playwright (browser automation for CinemagicHD web app)
+# MovieClips download
+yt-dlp>=2024.1.1
+
+# Playwright (browser automation for Telegram downloader)
 playwright>=1.44.0
 
 # YouTube upload
 google-api-python-client>=2.120.0
 google-auth-oauthlib>=1.2.0
 google-auth-httplib2>=0.2.0
-
-# Subtitle fetching
-requests>=2.31.0
-
-# Video/audio processing helpers
-moviepy>=1.0.3
-pydub>=0.25.1
 
 # Utilities
 python-dotenv>=1.0.0
