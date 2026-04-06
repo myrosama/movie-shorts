@@ -1,0 +1,28 @@
+# Video and media files
+*.mp4
+*.mkv
+*.srt
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+env/
+.env
+
+# Secrets
+*.json
+client_secrets.json
+youtube_token.json
+
+# Local runtime directories
+temp/
+output/
+queue/
+*_session/
+
+# IDE files
+.vscode/
+.idea/
